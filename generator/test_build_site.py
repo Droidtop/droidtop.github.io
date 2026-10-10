@@ -9,6 +9,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.parse
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import build_site as b  # noqa: E402
@@ -113,7 +114,7 @@ class Page(unittest.TestCase):
         self.assertTrue(body.lstrip().startswith('<aside class="disclaimer"'))
         self.assertNotIn("<script>alert", page)
         self.assertIn("Add this catalog to droidtop", page)
-        self.assertIn("https://droidtop.github.io/add-catalog?address=https%3A%2F%2Fexample.com%2Findex.json", page)
+        self.assertIn("https://droidtop.github.io/call?v=2&amp;catalog.add%28%7B%22address%22%3A%22https%3A%2F%2Fexample.com%2Findex.json%22%7D%29", page)
         self.assertIn("could not be read", page)
 
     def test_a_good_bundle_shows_its_permissions_and_a_mismatch_does_not(self):
@@ -122,7 +123,7 @@ class Page(unittest.TestCase):
         page = self.render(good, bundles_patch=lambda url, limit: data)
         self.assertIn("Connect to any site on the internet", page)
         self.assertIn("Because", page)
-        self.assertIn("/install-plugin?catalog=https%3A%2F%2Fexample.com%2Findex.json&amp;id=acme.tool", page)
+        self.assertIn("/call?v=2&amp;plugin.install%28%7B%22id%22%3A%22acme.tool%22%7D%29", page)
         bad = index(sha="0" * 64, msha=hashlib.sha256(raw).hexdigest())
         page = self.render(bad, bundles_patch=lambda url, limit: data)
         self.assertNotIn("Connect to any site", page)
@@ -133,12 +134,24 @@ class Page(unittest.TestCase):
         self.assertNotIn("Install in droidtop", page)
         self.assertIn("No stable release yet", page)
 
+    def test_an_unofficial_install_link_adds_the_catalog_trusts_the_key_and_installs(self):
+        link = b.install_link("https://droidtop.github.io", "https://github.com/o/c", "o.tool", official=False, origin="o", key_sha256="ab" * 32)
+        query = link.split("?", 1)[1].split("&")
+        self.assertEqual(query[0], "v=2")
+        calls = [urllib.parse.unquote(c) for c in query[1:]]
+        self.assertEqual(calls[0], 'catalog.add({"address":"https://github.com/o/c"})')
+        self.assertEqual(calls[1], 'key.trust({"catalog":"https://github.com/o/c","origin":"o","sha256":"' + "ab" * 32 + '"})')
+        self.assertEqual(calls[2], 'plugin.install({"catalog":"https://github.com/o/c","id":"o.tool"})')
+        # A value with & or ) stays inside its call.
+        tricky = b.add_link("https://droidtop.github.io", "https://e.org/x?a=1&b=(2)")
+        self.assertEqual(len(tricky.split("?", 1)[1].split("&")), 2)
+
     def test_source_repo_comes_from_the_release_url(self):
         self.assertEqual(b.source_repo(index()["origins"][0]["plugins"][0]), "https://github.com/Org/repo")
 
     def test_forward_pages_are_written_only_when_asked(self):
         with tempfile.TemporaryDirectory() as out:
-            for mode in ("add-catalog", "install-plugin"):
+            for mode in ("call", "add-catalog", "install-plugin"):
                 page = b.render_forward(mode)
                 self.assertIn(f'data-mode="{mode}"', page)
                 self.assertNotIn("{{", page)

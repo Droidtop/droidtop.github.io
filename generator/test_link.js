@@ -35,3 +35,19 @@ test("install-plugin needs a valid id and an https or absent catalog", () => {
   assert.ok(link.parse("install-plugin", "?catalog=http%3A%2F%2Fx&id=a.b").error);
   assert.ok(link.parse("install-plugin", "").error);
 });
+
+test("an action link page lists the calls and forwards the same query", () => {
+  const add = 'catalog.add({"address":"https://github.com/o/c?x=1&y=(2)"})';
+  const install = 'plugin.install({"catalog":"https://github.com/o/c","id":"o.tool"})';
+  const query = "?v=2&" + encodeURIComponent(add) + "&" + encodeURIComponent(install);
+  const r = link.parseCall(query);
+  assert.strictEqual(r.calls.length, 2);
+  assert.strictEqual(r.calls[0].args.address, "https://github.com/o/c?x=1&y=(2)");
+  assert.strictEqual(r.link, "droidtop://call" + query);
+  const b64 = Buffer.from(add + "&" + install).toString("base64url");
+  assert.strictEqual(link.parseCall("?v=2&b64:" + b64).calls[1].op, "plugin.install");
+  assert.ok(link.parseCall("?v=1&" + encodeURIComponent(add)).error);
+  assert.ok(link.parseCall("?v=2&" + encodeURIComponent("plugin.install(not json)")).error);
+  assert.ok(link.parseCall("?v=2&b64:" + Buffer.from("b64:" + b64).toString("base64url")).error);
+  assert.ok(link.parseCall("?v=2").error);
+});

@@ -252,12 +252,30 @@ def safe_https(url) -> str | None:
     return url if isinstance(url, str) and url.startswith("https://") and " " not in url and '"' not in url else None
 
 
+def api_call(op: str, args: dict) -> str:
+    """One literal API call of a droidtop action link (droidtop docs/SPEC.md 12a "Action links", grammar 2)."""
+    return f"{op}({json.dumps(args, separators=(',', ':'), ensure_ascii=False)})"
+
+
+def action_link(link_host: str, calls) -> str:
+    """The link page for a list of calls: /call?v=2&<call>&<call>..., each call percent-encoded whole."""
+    return f"{link_host}/call?v=2&" + "&".join(urllib.parse.quote(c, safe="") for c in calls)
+
+
 def add_link(link_host: str, address: str) -> str:
-    return f"{link_host}/add-catalog?address={urllib.parse.quote(address, safe='')}"
+    return action_link(link_host, [api_call("catalog.add", {"address": address})])
 
 
-def install_link(link_host: str, address: str, plugin_id: str) -> str:
-    return f"{link_host}/install-plugin?catalog={urllib.parse.quote(address, safe='')}&id={urllib.parse.quote(plugin_id, safe='')}"
+def install_link(link_host: str, address: str, plugin_id: str, official: bool = True, origin: str = "", key_sha256: str = "") -> str:
+    """Install from droidtop's own catalog: one call. From another catalog: add it, trust the publisher's key, install
+    (three calls the person approves one by one; denying the key refuses the install)."""
+    if official:
+        return action_link(link_host, [api_call("plugin.install", {"id": plugin_id})])
+    calls = [api_call("catalog.add", {"address": address})]
+    if origin and re.fullmatch(r"[0-9a-f]{64}", key_sha256 or ""):
+        calls.append(api_call("key.trust", {"catalog": address, "origin": origin, "sha256": key_sha256}))
+    calls.append(api_call("plugin.install", {"catalog": address, "id": plugin_id}))
+    return action_link(link_host, calls)
 
 
 def render_permissions(perms) -> str:
@@ -304,7 +322,9 @@ def render_plugin(index: dict, origin: dict, plugin: dict, perms, perm_note, off
     meta += f"stable {e(latest['version'])}" if latest else "no stable release yet"
     actions = []
     if latest and PLUGIN_ID.match(pid):
-        actions.append(f'<a class="btn primary" href="{e(install_link(link_host, address, pid))}">Install in droidtop</a>')
+        key_sha = ((origin.get("key") or {}).get("keySha256") or "").lower()
+        link = install_link(link_host, address, pid, official, origin.get("origin", ""), key_sha)
+        actions.append(f'<a class="btn primary" href="{e(link)}">Install in droidtop</a>')
     if repo:
         actions.append(f'<a class="btn" href="{e(repo)}">Source</a>')
     releases = unique_releases(plugin)
@@ -402,10 +422,17 @@ def render_catalog(index: dict, address: str, registry: dict, signature: str, no
 """
 
 
+FORWARD_TITLES = {
+    "call": "Open a droidtop link",
+    "add-catalog": "Add a catalog to droidtop",
+    "install-plugin": "Install a plugin in droidtop",
+}
+
+
 def render_forward(mode: str) -> str:
     with open(os.path.join(STATIC, "forward.html"), encoding="utf-8") as handle:
         template = handle.read()
-    title = "Add a catalog to droidtop" if mode == "add-catalog" else "Install a plugin in droidtop"
+    title = FORWARD_TITLES[mode]
     return template.replace("{{MODE}}", mode).replace("{{TITLE}}", title)
 
 
@@ -422,7 +449,7 @@ def build(args) -> None:
     open(os.path.join(args.out, ".nojekyll"), "w").close()
     if args.forward_pages:
         shutil.copy(os.path.join(STATIC, "link.js"), os.path.join(args.out, "link.js"))
-        for mode in ("add-catalog", "install-plugin"):
+        for mode in FORWARD_TITLES:
             os.makedirs(os.path.join(args.out, mode), exist_ok=True)
             with open(os.path.join(args.out, mode, "index.html"), "w", encoding="utf-8") as handle:
                 handle.write(render_forward(mode))
@@ -435,7 +462,7 @@ def main(argv=None) -> int:
     parser.add_argument("--registry", required=True)
     parser.add_argument("--out", required=True)
     parser.add_argument("--link-host", default=LINK_HOST)
-    parser.add_argument("--forward-pages", action="store_true", help="also write /add-catalog and /install-plugin (droidtop.github.io only)")
+    parser.add_argument("--forward-pages", action="store_true", help="also write /call and the older /add-catalog and /install-plugin (droidtop.github.io only)")
     args = parser.parse_args(argv)
     if not args.address.startswith("https://"):
         parser.error("--address must be an https address")
